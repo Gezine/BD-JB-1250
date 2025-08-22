@@ -82,7 +82,14 @@ You will find **two ISOs** in the release:
 * **macOS**: Use **[BD-SimpleBurn](https://github.com/C4ndyF1sh/BD-SimpleBurn)**.
 ---
 
-### 7. Summary Table
+### 7. Adding AIO fixes to Lapse.iso  
+The AIO fixes resolve black sreen and save data corruption issues in certain games. This is only needed for 1.00, 1.1 and 1.1b as of 1.2 the fixes are included in the ISO. 
+1. Place "aiofix_USBpayload.elf" on a USB drive and name it "payload.bin". 
+2. Place HEN or GoldHEN (or your desired post exploit payload) on the USB drive and name it "payload2.bin". 
+You will not need the USB drive again after the initial successfull run.
+---
+
+### 8. Summary Table
 
 | ISO Type               | What it Does              | Ports Used           | Payload Behavior                                            |
 | --------------------- | ------------------------- | ------------------- | ---------------------------------------------------------- |
@@ -91,14 +98,14 @@ You will find **two ISOs** in the release:
 
 ---
 
-### 8. Compilation Recommendation
+### 9. Compilation Recommendation
 
 Use **[john-tornblom's bdj-sdk](https://github.com/john-tornblom/bdj-sdk/)** for compiling.
 Replace the BDJO file in `BDMV` when building.
 
 ---
 
-### 9. Credits
+### 10. Credits
 
 * **[TheFlow](https://github.com/theofficialflow)** — BD-JB documentation & native code execution sources.
 * **[hammer-83](https://github.com/hammer-83)** — PS5 Remote JAR Loader reference.
@@ -106,6 +113,7 @@ Replace the BDJO file in `BDMV` when building.
 * **[shahrilnet, null\_ptr](https://github.com/shahrilnet/remote_lua_loader)** — Lua Lapse implementation, without which BD-J Lapse was impossible.
 
 ---
+
 
 
 
