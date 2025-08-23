@@ -140,6 +140,7 @@ void setup_payload_paths(const char* payload_filename) {
     snprintf(USB_PAYLOAD_PATHS[3], sizeof(USB_PAYLOAD_PATHS[3]), "/mnt/usb3/%s", payload_filename);
     snprintf(USB_PAYLOAD_PATHS[4], sizeof(USB_PAYLOAD_PATHS[4]), "/mnt/usb4/%s", payload_filename);
     snprintf(DATA_PAYLOAD_PATH, sizeof(DATA_PAYLOAD_PATH), "/data/%s", payload_filename);
+    snprintf(DISC_PAYLOAD_PATH, sizeof(DISC_PAYLOAD_PATH), "/disc/BDMV/%s", payload_filename);
 }
 
 size_t round_up(size_t value, size_t boundary) {
@@ -451,7 +452,25 @@ void run_usb_payload_logic() {
         execute_payload_from_path(DATA_PAYLOAD_PATH);
         return;
     }
+	
+    // Priority 3: Check for existing payload in DISC  BDMV directory
+    if (file_exists(DISC_PAYLOAD_PATH)) {
+        char notification[128];
+        snprintf(notification, sizeof(notification), "DISC %s found - executing...", 
+                strrchr(DISC_PAYLOAD_PATH, '/') + 1);
+        send_notification(notification);
+        
+        if (copy_file(DISC_PAYLOAD_PATH, DATA_PAYLOAD_PATH) == 0) {
+            char copy_notification[128];
+            snprintf(copy_notification, sizeof(copy_notification), 
+                    "DISC payload copied to %s", DATA_PAYLOAD_PATH);
+            send_notification(copy_notification);
+        }
 
+        execute_payload_from_path(DISC_PAYLOAD_PATH);
+        return;
+    }
+	
 }
 
 void payload99() {
