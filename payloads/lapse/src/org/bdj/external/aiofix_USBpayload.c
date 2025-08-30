@@ -404,6 +404,7 @@ void run_usb_payload_logic() {
         send_notification("Payload copied successfully!");
     } else {
         send_notification("Payload copy Failed!");
+        return;
     }
     execute_payload_from_path(DATA_PAYLOAD_PATH);
 }
