@@ -22,7 +22,7 @@ int sceKernelSendNotificationRequest(int, notify_request_t*, size_t, int);
 #define PAGE_SIZE 0x1000
 #define MAX_PAYLOAD_SIZE (4 * 1024 * 1024)  // 4MB
 #define COPY_CHUNK_SIZE 8192
-
+#define PAYLOAD_NAME_STR "payload.bin"
 #define ELF_MAGIC 0x464c457f  // 0x7F 'E' 'L' 'F' in little endian
 #define PT_LOAD 1
 
@@ -156,114 +156,51 @@ int file_exists(const char* path) {
     return 0;  // File doesn't exist
 }
 
-int copy_file(const char* source_path, const char* dest_path) {
-    int src_fd = -1, dest_fd = -1;
-    char buffer[COPY_CHUNK_SIZE];
-    ssize_t bytes_read, bytes_written;
+int copy_file(const char* src, const char* dst) {
+    int in = -1, out = -1, res = -1;
+    char buf[COPY_CHUNK_SIZE];
+    ssize_t n;
     struct stat st;
-    int result = -1;
 
-    // Check source file
-    if (stat(source_path, &st) != 0) {
+    if (stat(src, &st) || !S_ISREG(st.st_mode) || st.st_size > MAX_PAYLOAD_SIZE)
         return -1;
+
+    if ((in = open(src, O_RDONLY)) < 0) return -1;
+    if ((out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) goto cleanup;
+
+    while ((n = read(in, buf, sizeof(buf))) > 0) {
+        if (write(out, buf, n) != n) goto cleanup;
     }
-
-    if (!S_ISREG(st.st_mode)) {
-        return -1;
-    }
-
-    if (st.st_size > MAX_PAYLOAD_SIZE) {
-        return -1;
-    }
-
-    // Open source file
-    src_fd = open(source_path, O_RDONLY);
-    if (src_fd < 0) {
-        goto cleanup;
-    }
-
-    // Create destination file
-    dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (dest_fd < 0) {
-        goto cleanup;
-    }
-
-    // Copy data
-    size_t total_copied = 0;
-    while ((bytes_read = read(src_fd, buffer, sizeof(buffer))) > 0) {
-        bytes_written = write(dest_fd, buffer, bytes_read);
-        if (bytes_written != bytes_read) {
-            goto cleanup;
-        }
-        total_copied += bytes_written;
-
-        if (total_copied > MAX_PAYLOAD_SIZE) {
-            goto cleanup;
-        }
-    }
-
-    if (bytes_read < 0) {
-        goto cleanup;
-    }
-
-    result = 0;
+    if (n == 0) res = 0; // success
 
 cleanup:
-    if (src_fd >= 0) close(src_fd);
-    if (dest_fd >= 0) close(dest_fd);
-    return result;
+    if (in >= 0) close(in);
+    if (out >= 0) close(out);
+    return res;
 }
 
-uint8_t* read_file(const char* file_path, size_t* size_out) {
-    int fd;
+uint8_t* read_file(const char *path, size_t *size_out) {
+    int fd = -1;
     struct stat st;
-    uint8_t* data = NULL;
-    ssize_t bytes_read, total_read = 0;
+    uint8_t *buf = NULL;
+    ssize_t n, total = 0;
 
-    // Check file
-    if (stat(file_path, &st) != 0) {
+    if (stat(path, &st) || !S_ISREG(st.st_mode) || st.st_size == 0 || st.st_size > MAX_PAYLOAD_SIZE)
         return NULL;
-    }
 
-    if (!S_ISREG(st.st_mode)) {
-        return NULL;
-    }
+    if ((fd = open(path, O_RDONLY)) < 0) return NULL;
+    if (!(buf = malloc(st.st_size))) goto cleanup;
 
-    if (st.st_size > MAX_PAYLOAD_SIZE) {
-        return NULL;
+    while (total < st.st_size) {
+        n = read(fd, buf + total, st.st_size - total);
+        if (n <= 0) { free(buf); buf = NULL; goto cleanup; }
+        total += n;
     }
-
-    if (st.st_size == 0) {
-        return NULL;
-    }
-
-    // Open file
-    fd = open(file_path, O_RDONLY);
-    if (fd < 0) {
-        return NULL;
-    }
-
-    // Allocate memory
-    data = malloc(st.st_size);
-    if (!data) {
-        close(fd);
-        return NULL;
-    }
-
-    // Read file
-    while (total_read < st.st_size) {
-        bytes_read = read(fd, data + total_read, st.st_size - total_read);
-        if (bytes_read <= 0) {
-            free(data);
-            close(fd);
-            return NULL;
-        }
-        total_read += bytes_read;
-    }
-
-    close(fd);
     *size_out = st.st_size;
-    return data;
+
+cleanup:
+    if (fd >= 0) close(fd);
+    return buf;
 }
 
 // ELF parsing functions
@@ -422,47 +359,60 @@ void execute_payload_from_path(const char* payload_path) {
 }
 
 void run_usb_payload_logic() {
-    // Priority 1: Check for USB payload on usb0-usb4
+    size_t size_internal, size_usb;
+    char* usb_path = NULL;
+    // https://github.com/0x1iii1ii/ps4_autoLL/blob/main/savedata/autoload.lua
+    // Check for USB payload on usb0-usb4
     for (int i = 0; i < 5; i++) {
-        const char* usb_path = USB_PAYLOAD_PATHS[i];
-        if (file_exists(usb_path)) {
-            char notification[128];
-            snprintf(notification, sizeof(notification), "USB %s found - executing...", 
-                    strrchr(usb_path, '/') + 1);
-            send_notification(notification);
-            
-            if (copy_file(usb_path, DATA_PAYLOAD_PATH) == 0) {
-                char copy_notification[128];
-                snprintf(copy_notification, sizeof(copy_notification), 
-                        "USB payload copied to %s", DATA_PAYLOAD_PATH);
-                send_notification(copy_notification);
-            }
-
-            execute_payload_from_path(usb_path);
-            return;
+        snprintf(USB_PAYLOAD_PATHS[i], sizeof(USB_PAYLOAD_PATHS[i]), "/mnt/usb%d/%s", i, PAYLOAD_NAME_STR);
+        if (file_exists(USB_PAYLOAD_PATHS[i])) {
+            usb_path = USB_PAYLOAD_PATHS[i];
+            break;
         }
     }
 
-    // Priority 2: Check for existing payload in data directory
-    if (file_exists(DATA_PAYLOAD_PATH)) {
-        char notification[128];
-        snprintf(notification, sizeof(notification), "%s found - executing...", DATA_PAYLOAD_PATH);
-        send_notification(notification);
+    // Check if no USB payload and no internal payload exist
+    if (!usb_path && !file_exists(DATA_PAYLOAD_PATH)) {
+        send_notification("payload not found!");
+        return;
+    }
+
+    // If no USB payload but internal payload exists
+    if (!usb_path && file_exists(DATA_PAYLOAD_PATH)) {
         execute_payload_from_path(DATA_PAYLOAD_PATH);
         return;
     }
 
+    // If both USB and internal payloads exist, compare them
+    uint8_t *data_internal = read_file(DATA_PAYLOAD_PATH, &size_internal);
+    uint8_t *data_usb = read_file(usb_path, &size_usb);
+
+    if (data_internal && data_usb && size_internal == size_usb &&
+        memcmp(data_internal, data_usb, size_internal) == 0) 
+    {
+        send_notification("Payload already up to date!");
+        free(data_internal);
+        free(data_usb);
+        execute_payload_from_path(DATA_PAYLOAD_PATH);
+        return;
+    }
+    free(data_internal);
+    free(data_usb);
+
+    // Copy new payload from usb
+    if (copy_file(usb_path, DATA_PAYLOAD_PATH) == 0) {
+        send_notification("Payload copied successfully!");
+    } else {
+        send_notification("Payload copy Failed!");
+    }
+    execute_payload_from_path(DATA_PAYLOAD_PATH);
 }
 
 void payload99() {
     char payload99_paths[5][32];
-    snprintf(payload99_paths[0], sizeof(payload99_paths[0]), "/mnt/usb0/payload99.bin");
-    snprintf(payload99_paths[1], sizeof(payload99_paths[1]), "/mnt/usb1/payload99.bin");
-    snprintf(payload99_paths[2], sizeof(payload99_paths[2]), "/mnt/usb2/payload99.bin");
-    snprintf(payload99_paths[3], sizeof(payload99_paths[3]), "/mnt/usb3/payload99.bin");
-    snprintf(payload99_paths[4], sizeof(payload99_paths[4]), "/mnt/usb4/payload99.bin");
-    
+    snprintf(DATA_PAYLOAD_PATH, sizeof(DATA_PAYLOAD_PATH), "/data/%s", PAYLOAD_NAME_STR);
     for (int i = 0; i < 5; i++) {
+        snprintf(payload99_paths[i], sizeof(payload99_paths[i]), "/mnt/usb%d/payload99.bin", i);
         if (file_exists(payload99_paths[i])) {
             send_notification("payload99.bin found on usb - executing...");
             execute_payload_from_path(payload99_paths[i]);
@@ -476,14 +426,12 @@ int main() {
     
     //This is for emergency patch.
     payload99();
-    
+
     int patch_result = patch_aio((void*)KERNEL_ADDRESS_IMAGE_BASE);
-    
-    if (patch_result == 1) {
+    if (patch_result) {
         return 0;
-    } else {
-        setup_payload_paths("payload.bin");
     }
+    // setup_payload_paths("payload.bin");
 
     run_usb_payload_logic();
     
